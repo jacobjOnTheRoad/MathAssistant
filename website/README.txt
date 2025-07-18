@@ -8,11 +8,11 @@ RUNPOD_ENDPOINT="https://api.runpod.ai/v2/your_endpoint_id" # RunPod endpoint
 GROK_API_KEY="your_grok_api_key"     # Grok API key
 
 Upload the setup file to the server:
-scp -i ~/.ssh/<key_name> setup_myWebsite.sh root@<server_ip>:/root/
+scp -i ~/.ssh/<key_name> remote_server_setup.sh root@<server_ip>:/root/
 Run the setup file:
 ssh -i ~/.ssh/<key_name> root@<server_ip>
-chmod +x /root/setup_myWebsite.sh
-./setup_myWebsite.sh
+chmod +x /root/remote_server_setup.sh
+./remote_server_setup.sh
 
 You can use that first command to upload other files also from the web_site folder.
 
