@@ -1,5 +1,5 @@
 Change the environment variables for RUNPOD API KEY, RUNPOD ENDPOINT, 
-and DOMAIN in the server setup script first.  If these aren't set to 
+GROK API KEY, and DOMAIN in the server setup script first.  If these aren't set to 
 your site name and your runpod API key and endpoint values, 
 then nothing will work properly anyway.  
 The server script checks to make sure they're set to different values 
