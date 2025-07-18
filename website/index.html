@@ -84,9 +84,21 @@
       font-size: 14px;
       margin: 10px 0;
       text-align: left;
-      padding: 10px;
+      padding: 15px;
       background: #f9f9f9;
+      border: 1px solid #ddd;
       border-radius: 4px;
+      min-height: 50px;
+      line-height: 1.5;
+      overflow-x: auto; /* Handle wide formulas */
+    }
+    .explanation .math-display {
+      display: block;
+      text-align: center;
+      margin: 10px 0;
+    }
+    .explanation .math-inline {
+      display: inline;
     }
     .explain-button {
       display: none;
@@ -101,6 +113,16 @@
     }
     .explain-button:hover {
       background: #0056b3;
+    }
+    .explain-button:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
+    }
+    .note {
+      font-size: 12px;
+      color: #666;
+      margin: 10px 0;
+      text-align: center;
     }
     @media (min-width: 768px) {
       h1 {
@@ -144,8 +166,9 @@
     <h2>LaTeX Output</h2>
     <div class="latex-code" id="latexCode"></div>
     <div class="latex-rendered" id="latexRendered"></div>
-    <div class="explanation" id="explanation" style="display: none;"></div>
     <button class="explain-button" id="explainButton">Explain Formula with Grok</button>
+    <div class="explanation" id="explanation" style="display: none;"></div>
+    <div class="note">For step-by-step solving, use the free Grok tier at <a href="https://grok.com">grok.com</a> or <a href="https://x.com">x.com</a>.</div>
   </div>
 
   <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -243,7 +266,7 @@
         body: formData
       })
       .then(response => {
-        if (!response.ok) throw new Error('Server not responding');
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
         return response.json();
       })
       .then(data => {
@@ -259,7 +282,7 @@
         MathJax.typeset();
       })
       .catch(error => {
-        feedback.textContent = 'Failed to connect to server';
+        feedback.textContent = `Failed to connect to server: ${error.message}`;
         feedback.className = 'feedback error';
         console.error('Error sending image:', error);
         // Fallback LaTeX
@@ -276,33 +299,62 @@
 
     // Handle Grok API explanation
     explainButton.addEventListener('click', function() {
+      console.log('Explain button clicked'); // Debug button click
       const latex = latexCode.textContent;
+      console.log('Raw LaTeX:', latex); // Debug raw LaTeX
+      if (!latex.trim()) {
+        console.error('No LaTeX content to send');
+        feedback.textContent = 'No LaTeX formula to explain';
+        feedback.className = 'feedback error';
+        return;
+      }
+      let latexBase64;
+      try {
+        latexBase64 = btoa(encodeURIComponent(latex)); // Encode LaTeX as base64 with Unicode support
+        console.log('Sending LaTeX (base64):', latexBase64); // Debug base64
+      } catch (error) {
+        console.error('Base64 encoding failed:', error);
+        feedback.textContent = 'Failed to encode LaTeX formula';
+        feedback.className = 'feedback error';
+        return;
+      }
       feedback.textContent = 'Requesting explanation from Grok...';
       feedback.className = 'feedback';
+      explainButton.disabled = true; // Disable button during request
       
       fetch('/explain', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ latex: latex })
+        body: JSON.stringify({ latex: latexBase64 }) // Send base64-encoded LaTeX
       })
       .then(response => {
-        if (!response.ok) throw new Error('Failed to get explanation');
+        console.log('Response status:', response.status); // Debug response
+        if (!response.ok) throw new Error(`Failed to get explanation: ${response.status}`);
         return response.json();
       })
       .then(data => {
         feedback.textContent = 'Explanation received!';
         feedback.className = 'feedback success';
-        explanation.textContent = data.explanation || 'No explanation provided';
+        // Process explanation to render LaTeX
+        let explanationText = data.explanation || 'No explanation provided';
+        // Replace \[...\] with <span class="math-display">...</span>
+        explanationText = explanationText.replace(/\\\[(.*?)\\\]/g, '<span class="math-display">\\[$1\\]</span>');
+        // Replace $...$ with <span class="math-inline">...</span>
+        explanationText = explanationText.replace(/\$(.*?)\$/g, '<span class="math-inline">\\($1\\)</span>');
+        explanation.innerHTML = explanationText;
         explanation.style.display = 'block';
+        explainButton.disabled = false; // Re-enable button
+        MathJax.typeset(); // Render LaTeX
       })
       .catch(error => {
-        feedback.textContent = 'Failed to get explanation';
+        feedback.textContent = `Failed to get explanation: ${error.message}`;
         feedback.className = 'feedback error';
         console.error('Error getting explanation:', error);
-        explanation.textContent = 'Failed to retrieve explanation from Grok';
+        explanation.textContent = `Failed to retrieve explanation: ${error.message}`;
         explanation.style.display = 'block';
+        explainButton.disabled = false; // Re-enable button
       });
     });
   </script>
