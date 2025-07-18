@@ -53,6 +53,7 @@ mkdir -p "$WEB_DIR/uploads"
 # Set directory permissions
 chown -R www-data:www-data "$WEB_DIR"
 chmod -R 755 "$WEB_DIR"
+chmod 750 "$WEB_DIR/uploads"  # Restrict uploads folder, allow www-data write
 
 # Create server block
 echo "server {
@@ -135,24 +136,39 @@ certbot --nginx --non-interactive --agree-tos --email "$EMAIL" -d "${SITE_NAME}.
 certbot renew --dry-run
 
 # Create server.py
-echo "from fastapi import FastAPI, File, UploadFile, HTTPException
+echo "from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import os
 import shutil
 import base64
 import requests
 import time
 import logging
-from openai import OpenAI
+import argparse
+from openai import OpenAI, OpenAIError
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Log environment variables for debugging
+logger.info(f'Environment variable SITE_NAME: {os.getenv(\"SITE_NAME\", \"Not set\")}')
+logger.info(f'Environment variable SITE_TLD: {os.getenv(\"SITE_TLD\", \"Not set\")}')
+logger.info(f'Environment variable WEB_DIR: {os.getenv(\"WEB_DIR\", \"Not set\")}')
+logger.info(f'Environment variable RUNPOD_API_KEY: {os.getenv(\"RUNPOD_API_KEY\", \"Not set\")[:4]}... (redacted)')
+logger.info(f'Environment variable RUNPOD_ENDPOINT: {os.getenv(\"RUNPOD_ENDPOINT\", \"Not set\")}')
+logger.info(f'Environment variable GROK_API_KEY: {os.getenv(\"GROK_API_KEY\", \"Not set\")[:4]}... (redacted)')
+
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
-UPLOAD_FOLDER = '/var/www/${SITE_NAME}/uploads'
+
+# Environment variables
+SITE_NAME = os.getenv('SITE_NAME', 'llmprojectwinter')
+SITE_TLD = os.getenv('SITE_TLD', 'com')
+WEB_DIR = os.getenv('WEB_DIR', '/var/www/llmprojectwinter')
+UPLOAD_FOLDER = os.path.join(WEB_DIR, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # RunPod configuration
@@ -164,6 +180,9 @@ POLL_INTERVAL = 2  # Seconds between status checks
 # Grok API configuration
 GROK_API_KEY = os.getenv('GROK_API_KEY', '')
 GROK_API_BASE = 'https://api.x.ai/v1'
+
+class LatexRequest(BaseModel):
+    latex: str
 
 def submit_job(image_b64: str) -> str:
     '''Submit a job to RunPod and return the job ID.'''
@@ -239,51 +258,85 @@ def poll_job_status(job_id: str) -> dict:
         raise
 
 @app.post('/upload')
-async def upload_image(image: UploadFile = File(...)):
+async def upload_image(request: Request, image: UploadFile = File(...)):
+    logger.info(f'Received upload request from {request.client.host}, filename: {image.filename}, content-type: {image.content_type}')
     try:
+        # Check upload folder permissions
+        if not os.access(UPLOAD_FOLDER, os.W_OK):
+            logger.error(f'No write permission for upload folder: {UPLOAD_FOLDER}')
+            raise HTTPException(status_code=500, detail='Server misconfiguration: No write permission for upload folder')
+
         # Save the image temporarily
         file_path = os.path.join(UPLOAD_FOLDER, image.filename)
+        logger.info(f'Saving image to {file_path}')
         with open(file_path, 'wb') as buffer:
             shutil.copyfileobj(image.file, buffer)
         
+        # Verify file was written
+        if not os.path.exists(file_path):
+            logger.error(f'Failed to save image to {file_path}')
+            raise HTTPException(status_code=500, detail='Failed to save uploaded image')
+        
         # Convert image to base64
+        logger.info(f'Converting image {file_path} to base64')
         with open(file_path, 'rb') as image_file:
             image_b64 = base64.b64encode(image_file.read()).decode('utf-8')
         
         # Delete the image
+        logger.info(f'Deleting temporary image {file_path}')
         os.remove(file_path)
         
         # Send to RunPod
+        logger.info(f'Submitting job to RunPod for image {image.filename}')
         job_id = submit_job(image_b64)
         result = poll_job_status(job_id)
         
+        logger.info(f'Upload successful, result: {result}')
         return JSONResponse(content=result)
     except Exception as e:
         # Ensure file is deleted on error
-        if os.path.exists(file_path):
+        if 'file_path' in locals() and os.path.exists(file_path):
+            logger.info(f'Cleaning up {file_path} after error')
             os.remove(file_path)
-        return JSONResponse(content={'error': str(e)}, status_code=500)
+        logger.error(f'Upload failed: {str(e)}')
+        raise HTTPException(status_code=500, detail=f'Upload failed: {str(e)}')
 
 @app.post('/explain')
-async def explain_formula(latex: str = ''):
-    if not latex:
+async def explain_formula(request: Request, body: LatexRequest):
+    logger.info(f'Raw request body: {await request.body()}')
+    latex = body.latex
+    logger.info(f'Received LaTeX (base64): {latex}')
+    try:
+        decoded_latex = base64.b64decode(latex).decode('utf-8')
+        logger.info(f'Decoded LaTeX: {decoded_latex}')
+    except Exception as e:
+        logger.error(f'Failed to decode base64 LaTeX: {str(e)}')
+        raise HTTPException(status_code=400, detail=f'Invalid base64 LaTeX: {str(e)}')
+    
+    if not decoded_latex.strip():
         raise HTTPException(status_code=400, detail='LaTeX formula is required')
     
+    logger.info(f'Attempting Grok API call with key: {GROK_API_KEY[:4]}... (redacted)')
     try:
         client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_API_BASE)
-        prompt = f'You are a math tutor. Provide a clear and concise explanation of the mathematical formula given in LaTeX: {latex}. Include its meaning, context, and a simple example if applicable.'
+        prompt = f'You are a math tutor for high school students. Provide a clear, simple explanation of the LaTeX formula {decoded_latex} in under 3000 characters, focusing on its meaning in algebra or calculus. Use basic terms and avoid advanced physics concepts. Include a short example if helpful.'
+        logger.info('Sending request to Grok API')
         response = client.chat.completions.create(
-            model='grok-beta',
+            model='grok-3',
             messages=[
                 {'role': 'system', 'content': 'You are Grok, a helpful AI assistant created by xAI.'},
                 {'role': 'user', 'content': prompt}
             ],
-            max_tokens=500,
+            max_tokens=3000,
             temperature=0.7
         )
+        logger.info('Received response from Grok API')
         explanation = response.choices[0].message.content
-        logger.info(f'Grok API response for LaTeX {latex}: {explanation}')
+        logger.info(f'Grok API response for LaTeX {decoded_latex}: {explanation}')
         return JSONResponse(content={'explanation': explanation})
+    except OpenAIError as e:
+        logger.error(f'Grok API error: {str(e)}')
+        raise HTTPException(status_code=500, detail=f'Grok API error: {str(e)}')
     except Exception as e:
         logger.error(f'Failed to get explanation from Grok API: {str(e)}')
         raise HTTPException(status_code=500, detail=f'Failed to get explanation: {str(e)}')
@@ -309,6 +362,9 @@ After=network.target
 [Service]
 User=www-data
 WorkingDirectory=$WEB_DIR
+Environment=\"SITE_NAME=$SITE_NAME\"
+Environment=\"SITE_TLD=$SITE_TLD\"
+Environment=\"WEB_DIR=$WEB_DIR\"
 Environment=\"RUNPOD_API_KEY=$RUNPOD_API_KEY\"
 Environment=\"RUNPOD_ENDPOINT=$RUNPOD_ENDPOINT\"
 Environment=\"GROK_API_KEY=$GROK_API_KEY\"
