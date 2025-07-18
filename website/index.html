@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -119,6 +80,14 @@
       font-size: 14px;
       margin: 10px 0;
     }
+    .explanation {
+      font-size: 14px;
+      margin: 10px 0;
+      text-align: left;
+      padding: 10px;
+      background: #f9f9f9;
+      border-radius: 4px;
+    }
     .explain-button {
       display: none;
       margin: 10px auto;
@@ -175,6 +144,7 @@
     <h2>LaTeX Output</h2>
     <div class="latex-code" id="latexCode"></div>
     <div class="latex-rendered" id="latexRendered"></div>
+    <div class="explanation" id="explanation" style="display: none;"></div>
     <button class="explain-button" id="explainButton">Explain Formula with Grok</button>
   </div>
 
@@ -203,6 +173,7 @@
     const latexCode = document.getElementById('latexCode');
     const latexRendered = document.getElementById('latexRendered');
     const explainButton = document.getElementById('explainButton');
+    const explanation = document.getElementById('explanation');
     const originalDropZoneText = dropZone.textContent;
 
     // Handle mobile tap to trigger camera
@@ -247,7 +218,7 @@
     });
     cameraInput.addEventListener('change', function(e) {
       if (e.target.files.length) {
-        handleFiles(e.dataTransfer.files);
+        handleFiles(e.target.files);
       }
     });
 
@@ -283,6 +254,8 @@
         latexRendered.innerHTML = `\\(${latex}\\)`; // MathJax will render this
         latexDisplay.style.display = 'block';
         explainButton.style.display = 'block';
+        explanation.style.display = 'none';
+        explanation.textContent = '';
         MathJax.typeset();
       })
       .catch(error => {
@@ -295,15 +268,42 @@
         latexRendered.innerHTML = `\\(${sampleLatex}\\)`; // MathJax will render this
         latexDisplay.style.display = 'block';
         explainButton.style.display = 'block';
+        explanation.style.display = 'none';
+        explanation.textContent = '';
         MathJax.typeset();
       });
     }
 
-    // Placeholder for Grok API call
+    // Handle Grok API explanation
     explainButton.addEventListener('click', function() {
       const latex = latexCode.textContent;
-      const query = `Explain this formula: ${latex}`;
-      alert('This would send to Grok API: ' + query);
+      feedback.textContent = 'Requesting explanation from Grok...';
+      feedback.className = 'feedback';
+      
+      fetch('/explain', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ latex: latex })
+      })
+      .then(response => {
+        if (!response.ok) throw new Error('Failed to get explanation');
+        return response.json();
+      })
+      .then(data => {
+        feedback.textContent = 'Explanation received!';
+        feedback.className = 'feedback success';
+        explanation.textContent = data.explanation || 'No explanation provided';
+        explanation.style.display = 'block';
+      })
+      .catch(error => {
+        feedback.textContent = 'Failed to get explanation';
+        feedback.className = 'feedback error';
+        console.error('Error getting explanation:', error);
+        explanation.textContent = 'Failed to retrieve explanation from Grok';
+        explanation.style.display = 'block';
+      });
     });
   </script>
 </body>
