@@ -11,9 +11,14 @@ SERVER_BLOCK="/etc/nginx/sites-available/${SITE_NAME}"
 SERVICE_NAME="math-assistant"
 
 # Validate required environment variables
+if [ "$SITE_NAME" = "yourdomain" ]; then
+    echo "Error: SITE_NAME must be set to a valid domain (not 'yourdomain')."
+    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id'"
+    exit 1
+fi
 if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_ENDPOINT" ]; then
     echo "Error: RUNPOD_API_KEY and RUNPOD_ENDPOINT must be set."
-    echo "Example: export RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id'"
+    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id'"
     exit 1
 fi
 
