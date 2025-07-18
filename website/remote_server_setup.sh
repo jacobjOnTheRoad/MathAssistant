@@ -117,7 +117,7 @@ fi
 systemctl reload nginx
 
 # Check Nginx status
-if ! systemctl370 is-active --quiet nginx; then
+if ! systemctl is-active --quiet nginx; then
     echo "Nginx is not running. Check /var/log/nginx/error.log"
     exit 1
 fi
@@ -320,7 +320,15 @@ async def explain_formula(request: Request, body: LatexRequest):
     logger.info(f'Attempting Grok API call with key: {GROK_API_KEY[:4]}... (redacted)')
     try:
         client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_API_BASE)
-        prompt = f'You are a math tutor for high school students. Provide a clear, simple explanation of the LaTeX formula {decoded_latex} in under 3000 characters, focusing on its meaning in algebra or calculus. Use basic terms and avoid advanced physics concepts. Include a short example if helpful.'
+        prompt = f"""You are a math tutor for high school students learning algebra and early calculus. Explain the LaTeX formula {decoded_latex} in under 2000 characters using simple, clear language. Focus on its meaning and avoid advanced concepts beyond basic calculus. Include a short, relatable example if helpful.
+
+**Formatting Instructions**:
+- Use short sentences and simple words.
+- Write concise paragraphs with double line breaks between them.
+- Place all display math LaTeX formulas on separate lines, enclosed in \[...\].
+- Use $...$ for inline math, keeping it brief.
+- Do not embed LaTeX within text lines; separate it clearly.
+- End with a short, encouraging note for students."""
         logger.info('Sending request to Grok API')
         response = client.chat.completions.create(
             model='grok-3',
@@ -328,7 +336,7 @@ async def explain_formula(request: Request, body: LatexRequest):
                 {'role': 'system', 'content': 'You are Grok, a helpful AI assistant created by xAI.'},
                 {'role': 'user', 'content': prompt}
             ],
-            max_tokens=3000,
+            max_tokens=2000,  # Reduced to ensure concise responses
             temperature=0.7
         )
         logger.info('Received response from Grok API')
@@ -351,9 +359,380 @@ if __name__ == '__main__':
     uvicorn.run(app, host='0.0.0.0', port=args.port)
 " > "$WEB_DIR/server.py"
 
-# Set server.py permissions
+# Create index.html
+echo "<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"UTF-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+  <title>Math Assistant</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 10px;
+      background-color: #f5f5f5;
+    }
+    h1 {
+      text-align: center;
+      font-size: 24px;
+      color: #333;
+      margin: 10px 0;
+    }
+    .container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .draggable {
+      width: 100px;
+      height: 100px;
+      background: #e0e0e0;
+      border: 1px solid #333;
+      border-radius: 8px;
+      text-align: center;
+      line-height: 100px;
+      cursor: move;
+      touch-action: none;
+      user-select: none;
+    }
+    .drop-zone {
+      width: 100%;
+      min-height: 200px;
+      border: 2px dashed #666;
+      background: #fff;
+      border-radius: 8px;
+      text-align: center;
+      padding: 15px;
+      box-sizing: border-box;
+      font-size: 16px;
+      color: #333;
+    }
+    .drop-zone img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+    .feedback {
+      text-align: center;
+      margin: 10px 0;
+      font-size: 14px;
+      color: #333;
+    }
+    .feedback.success {
+      color: #28a745;
+    }
+    .feedback.error {
+      color: #dc3545;
+    }
+    .latex-display {
+      margin: 20px auto;
+      max-width: 800px;
+      padding: 10px;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .latex-code {
+      font-family: monospace;
+      font-size: 14px;
+      margin: 10px 0;
+    }
+    .explanation {
+      font-size: 14px;
+      margin: 10px 0;
+      text-align: left;
+      padding: 15px;
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      min-height: 50px;
+      line-height: 1.5;
+      overflow-x: auto;
+    }
+    .explanation .math-display {
+      display: block;
+      text-align: center;
+      margin: 15px 0;
+      font-size: 16px;
+    }
+    .explanation .math-inline {
+      display: inline;
+      font-size: 14px;
+    }
+    .explain-button {
+      display: none;
+      margin: 10px auto;
+      padding: 10px 20px;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .explain-button:hover {
+      background: #0056b3;
+    }
+    .explain-button:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
+    }
+    .note {
+      font-size: 12px;
+      color: #666;
+      margin: 10px 0;
+      text-align: center;
+    }
+    @media (min-width: 768px) {
+      h1 {
+        font-size: 32px;
+      }
+      .container {
+        flex-direction: row;
+        justify-content: center;
+      }
+      .draggable {
+        width: 120px;
+        height: 120px;
+        line-height: 120px;
+      }
+      .drop-zone {
+        width: 600px;
+        min-height: 400px;
+        font-size: 18px;
+      }
+      .latex-display {
+        font-size: 16px;
+      }
+    }
+    @media (min-width: 1024px) {
+      .drop-zone {
+        width: 800px;
+        min-height: 500px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Math Assistant</h1>
+  <div class=\"container\">
+    <div class=\"draggable\" id=\"draggable\">Drag Me</div>
+    <div class=\"drop-zone\" id=\"dropZone\">Drop Here or Use Camera</div>
+    <input type=\"file\" accept=\"image/*\" id=\"cameraInput\" style=\"display: none;\">
+  </div>
+  <div class=\"feedback\" id=\"feedback\"></div>
+  <div class=\"latex-display\" id=\"latexDisplay\" style=\"display: none;\">
+    <h2>LaTeX Output</h2>
+    <div class=\"latex-code\" id=\"latexCode\"></div>
+    <div class=\"latex-rendered\" id=\"latexRendered\"></div>
+    <button class=\"explain-button\" id=\"explainButton\">Explain Formula with Grok</button>
+    <div class=\"explanation\" id=\"explanation\" style=\"display: none;\"></div>
+    <div class=\"note\">For step-by-step solving, use the free Grok tier at <a href=\"https://grok.com\">grok.com</a> or <a href=\"https://x.com\">x.com</a>.</div>
+  </div>
+
+  <script src=\"https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js\"></script>
+  <script src=\"https://unpkg.com/interactjs@1.10.27/dist/interact.min.js\"></script>
+  <script>
+    // Placeholder drag-and-drop with Interact.js
+    interact('.draggable')
+      .draggable({
+        listeners: {
+          move: function(event) {
+            const target = event.target;
+            const x = (parseFloat(target.getAttribute('data-x')) || 0) + event.dx;
+            const y = (parseFloat(target.getAttribute('data-y')) || 0) + event.dy;
+            target.style.transform = \`translate(\${x}px, \${y}px)\`;
+            target.setAttribute('data-x', x);
+            target.setAttribute('data-y', y);
+          }
+        }
+      });
+
+    const dropZone = document.getElementById('dropZone');
+    const cameraInput = document.getElementById('cameraInput');
+    const feedback = document.getElementById('feedback');
+    const latexDisplay = document.getElementById('latexDisplay');
+    const latexCode = document.getElementById('latexCode');
+    const latexRendered = document.getElementById('latexRendered');
+    const explainButton = document.getElementById('explainButton');
+    const explanation = document.getElementById('explanation');
+    const originalDropZoneText = dropZone.textContent;
+
+    // Handle mobile tap to trigger camera
+    let isProcessing = false;
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      dropZone.addEventListener('touchstart', function(event) {
+        if (isProcessing) return;
+        isProcessing = true;
+        event.preventDefault();
+        cameraInput.click();
+        setTimeout(() => { isProcessing = false; }, 1000);
+      });
+      dropZone.addEventListener('click', function(event) {
+        if (isProcessing) return;
+        isProcessing = true;
+        event.preventDefault();
+        cameraInput.click();
+        setTimeout(() => { isProcessing = false; }, 1000);
+      });
+    }
+
+    // Handle desktop drop zone
+    interact('.drop-zone').dropzone({
+      accept: '.draggable',
+      ondrop: function(event) {
+        if (!isMobile) {
+          dropZone.innerHTML = '';
+          dropZone.appendChild(event.relatedTarget);
+          dropZone.textContent = '';
+        }
+      }
+    });
+
+    // Handle file input (camera or file drop)
+    dropZone.addEventListener('dragover', (e) => e.preventDefault());
+    dropZone.addEventListener('drop', function(e) {
+      e.preventDefault();
+      if (e.dataTransfer.files.length) {
+        handleFiles(e.dataTransfer.files);
+      }
+    });
+    cameraInput.addEventListener('change', function(e) {
+      if (e.target.files.length) {
+        handleFiles(e.target.files);
+      }
+    });
+
+    function handleFiles(files) {
+      const file = files[0];
+      // Clear drop zone and add new image
+      dropZone.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(file);
+      img.style.maxWidth = '100%';
+      dropZone.appendChild(img);
+
+      // Show sending feedback
+      feedback.textContent = 'Sending image...';
+      feedback.className = 'feedback';
+
+      // Send image to FastAPI server
+      const formData = new FormData();
+      formData.append('image', file);
+      fetch('/upload', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => {
+        if (!response.ok) throw new Error(\`Server error: \${response.status}\`);
+        return response.json();
+      })
+      .then(data => {
+        feedback.textContent = 'Image sent successfully!';
+        feedback.className = 'feedback success';
+        const latex = data.latex || 'E = mc^2';
+        latexCode.textContent = latex;
+        latexRendered.innerHTML = \`\\\\(\${latex}\\\\)\`; // MathJax will render this
+        latexDisplay.style.display = 'block';
+        explainButton.style.display = 'block';
+        explanation.style.display = 'none';
+        explanation.textContent = '';
+        MathJax.typeset();
+      })
+      .catch(error => {
+        feedback.textContent = \`Failed to connect to server: \${error.message}\`;
+        feedback.className = 'feedback error';
+        console.error('Error sending image:', error);
+        // Fallback LaTeX
+        const sampleLatex = 'E = mc^2';
+        latexCode.textContent = sampleLatex;
+        latexRendered.innerHTML = \`\\\\(\${sampleLatex}\\\\)\`; // MathJax will render this
+        latexDisplay.style.display = 'block';
+        explainButton.style.display = 'block';
+        explanation.style.display = 'none';
+        explanation.textContent = '';
+        MathJax.typeset();
+      });
+    }
+
+    // Handle Grok API explanation
+    explainButton.addEventListener('click', function() {
+      console.log('Explain button clicked'); // Debug button click
+      const latex = latexCode.textContent;
+      console.log('Raw LaTeX:', latex); // Debug raw LaTeX
+      if (!latex.trim()) {
+        console.error('No LaTeX content to send');
+        feedback.textContent = 'No LaTeX formula to explain';
+        feedback.className = 'feedback error';
+        return;
+      }
+      let latexBase64;
+      try {
+        latexBase64 = btoa(encodeURIComponent(latex)); // Encode LaTeX as base64 with Unicode support
+        console.log('Sending LaTeX (base64):', latexBase64); // Debug base64
+      } catch (error) {
+        console.error('Base64 encoding failed:', error);
+        feedback.textContent = 'Failed to encode LaTeX formula';
+        feedback.className = 'feedback error';
+        return;
+      }
+      feedback.textContent = 'Requesting explanation from Grok...';
+      feedback.className = 'feedback';
+      explainButton.disabled = true; // Disable button during request
+      
+      fetch('/explain', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ latex: latexBase64 }) // Send base64-encoded LaTeX
+      })
+      .then(response => {
+        console.log('Response status:', response.status); // Debug response
+        if (!response.ok) throw new Error(\`Failed to get explanation: \${response.status}\`);
+        return response.json();
+      })
+      .then(data => {
+        feedback.textContent = 'Explanation received!';
+        feedback.className = 'feedback success';
+        let explanationText = data.explanation || 'No explanation provided';
+        // Replace \[...\] with <span class=\"math-display\">...</span>
+        explanationText = explanationText.replace(/\\\\\[(.*?)\\\\\]/g, '<span class=\"math-display\">\\\\[$1\\\\]</span>');
+        // Replace $...$ with <span class=\"math-inline\">...</span>
+        explanationText = explanationText.replace(/\\\$(.*?)\\\$/g, '<span class=\"math-inline\">\\\\($1\\\\)</span>');
+        // Fallback for unclosed LaTeX
+        explanationText = explanationText.replace(/\\\\\[.*?$/g, '<span class=\"math-display\">[Unclosed LaTeX]</span>');
+        explanationText = explanationText.replace(/\\\\\).*?$/g, '<span class=\"math-inline\">[Unclosed LaTeX]</span>');
+        explanation.innerHTML = explanationText;
+        explanation.style.display = 'block';
+        explainButton.disabled = false; // Re-enable button
+        MathJax.typeset(); // Render LaTeX
+      })
+      .catch(error => {
+        feedback.textContent = \`Failed to get explanation: \${error.message}\`;
+        feedback.className = 'feedback error';
+        console.error('Error getting explanation:', error);
+        explanation.textContent = \`Failed to retrieve explanation: \${error.message}\`;
+        explanation.style.display = 'block';
+        explainButton.disabled = false; // Re-enable button
+      });
+    });
+  </script>
+</body>
+</html>
+" > "$WEB_DIR/index.html"
+
+# Set file permissions
 chown www-data:www-data "$WEB_DIR/server.py"
 chmod 644 "$WEB_DIR/server.py"
+chown www-data:www-data "$WEB_DIR/index.html"
+chmod 644 "$WEB_DIR/index.html"
 
 # Create systemd service for server.py
 echo "[Unit]
