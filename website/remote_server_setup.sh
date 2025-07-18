@@ -6,6 +6,7 @@
 SITE_NAME="${SITE_NAME:-yourdomain}"  # e.g., mywebsite
 SITE_TLD="${SITE_TLD:-com}"           # e.g., com, org, net
 EMAIL="${EMAIL:-your_email@example.com}"  # For Certbot notifications
+GROK_API_KEY="${GROK_API_KEY:-}"      # Grok API key
 WEB_DIR="/var/www/${SITE_NAME}"
 SERVER_BLOCK="/etc/nginx/sites-available/${SITE_NAME}"
 SERVICE_NAME="math-assistant"
@@ -13,12 +14,12 @@ SERVICE_NAME="math-assistant"
 # Validate required environment variables
 if [ "$SITE_NAME" = "yourdomain" ]; then
     echo "Error: SITE_NAME must be set to a valid domain (not 'yourdomain')."
-    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id'"
+    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id' GROK_API_KEY='your_grok_api_key'"
     exit 1
 fi
-if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_ENDPOINT" ]; then
-    echo "Error: RUNPOD_API_KEY and RUNPOD_ENDPOINT must be set."
-    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id'"
+if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_ENDPOINT" ] || [ -z "$GROK_API_KEY" ]; then
+    echo "Error: RUNPOD_API_KEY, RUNPOD_ENDPOINT, and GROK_API_KEY must be set."
+    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id' GROK_API_KEY='your_grok_api_key'"
     exit 1
 fi
 
@@ -81,6 +82,14 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    location /explain {
+        proxy_pass http://127.0.0.1:5000/explain;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
     add_header X-Frame-Options \"SAMEORIGIN\";
     add_header X-Content-Type-Options \"nosniff\";
     add_header X-XSS-Protection \"1; mode=block\";
@@ -113,7 +122,7 @@ fi
 
 # Install Python and dependencies for server.py
 apt install python3 python3-pip -y
-pip3 install --force-reinstall fastapi[all] uvicorn requests urllib3==1.26.18 chardet==5.2.0
+pip3 install --force-reinstall fastapi[all] uvicorn requests urllib3==1.26.18 chardet==5.2.0 openai
 
 # Install Certbot
 apt install certbot python3-certbot-nginx -y
@@ -126,16 +135,16 @@ certbot --nginx --non-interactive --agree-tos --email "$EMAIL" -d "${SITE_NAME}.
 certbot renew --dry-run
 
 # Create server.py
-echo "from fastapi import FastAPI, File, UploadFile
+echo "from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import shutil
-import argparse
 import base64
 import requests
 import time
 import logging
+from openai import OpenAI
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -151,6 +160,10 @@ RUNPOD_API_KEY = os.getenv('RUNPOD_API_KEY', '')
 RUNPOD_ENDPOINT = os.getenv('RUNPOD_ENDPOINT', 'https://api.runpod.ai/v2/<YOUR RUNPOD ENDPOINT ID HERE>')
 TIMEOUT = 180  # Increased to 180 seconds
 POLL_INTERVAL = 2  # Seconds between status checks
+
+# Grok API configuration
+GROK_API_KEY = os.getenv('GROK_API_KEY', '')
+GROK_API_BASE = 'https://api.x.ai/v1'
 
 def submit_job(image_b64: str) -> str:
     '''Submit a job to RunPod and return the job ID.'''
@@ -251,6 +264,30 @@ async def upload_image(image: UploadFile = File(...)):
             os.remove(file_path)
         return JSONResponse(content={'error': str(e)}, status_code=500)
 
+@app.post('/explain')
+async def explain_formula(latex: str = ''):
+    if not latex:
+        raise HTTPException(status_code=400, detail='LaTeX formula is required')
+    
+    try:
+        client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_API_BASE)
+        prompt = f'You are a math tutor. Provide a clear and concise explanation of the mathematical formula given in LaTeX: {latex}. Include its meaning, context, and a simple example if applicable.'
+        response = client.chat.completions.create(
+            model='grok-beta',
+            messages=[
+                {'role': 'system', 'content': 'You are Grok, a helpful AI assistant created by xAI.'},
+                {'role': 'user', 'content': prompt}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        explanation = response.choices[0].message.content
+        logger.info(f'Grok API response for LaTeX {latex}: {explanation}')
+        return JSONResponse(content={'explanation': explanation})
+    except Exception as e:
+        logger.error(f'Failed to get explanation from Grok API: {str(e)}')
+        raise HTTPException(status_code=500, detail=f'Failed to get explanation: {str(e)}')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='FastAPI server with configurable port')
     parser.add_argument('port', type=int, default=5000, nargs='?', help='Port to run the server on (default: 5000)')
@@ -274,6 +311,7 @@ User=www-data
 WorkingDirectory=$WEB_DIR
 Environment=\"RUNPOD_API_KEY=$RUNPOD_API_KEY\"
 Environment=\"RUNPOD_ENDPOINT=$RUNPOD_ENDPOINT\"
+Environment=\"GROK_API_KEY=$GROK_API_KEY\"
 ExecStart=/usr/bin/python3 $WEB_DIR/server.py
 Restart=always
 
