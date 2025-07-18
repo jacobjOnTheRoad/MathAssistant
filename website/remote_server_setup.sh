@@ -1,25 +1,26 @@
 #!/bin/bash
 
-# Run as root after setting environment variables
+# Run as root after setting environment variables below
 
-# Configuration variables (set via environment or defaults)
-SITE_NAME="${SITE_NAME:-yourdomain}"  # e.g., mywebsite
-SITE_TLD="${SITE_TLD:-com}"           # e.g., com, org, net
-EMAIL="${EMAIL:-your_email@example.com}"  # For Certbot notifications
-GROK_API_KEY="${GROK_API_KEY:-}"      # Grok API key
+# Configuration variables (set these before running the script)
+SITE_NAME="yourdomain"                # e.g., mywebsite
+SITE_TLD="com"                       # e.g., com, org, net
+EMAIL="your_email@example.com"       # For Certbot notifications
+RUNPOD_API_KEY="your_runpod_api_key" # RunPod API key
+RUNPOD_ENDPOINT="https://api.runpod.ai/v2/your_endpoint_id" # RunPod endpoint
+GROK_API_KEY="your_grok_api_key"     # Grok API key
+
+# Derived variables
 WEB_DIR="/var/www/${SITE_NAME}"
 SERVER_BLOCK="/etc/nginx/sites-available/${SITE_NAME}"
 SERVICE_NAME="math-assistant"
 
 # Validate required environment variables
-if [ "$SITE_NAME" = "yourdomain" ]; then
-    echo "Error: SITE_NAME must be set to a valid domain (not 'yourdomain')."
-    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id' GROK_API_KEY='your_grok_api_key'"
-    exit 1
-fi
-if [ -z "$RUNPOD_API_KEY" ] || [ -z "$RUNPOD_ENDPOINT" ] || [ -z "$GROK_API_KEY" ]; then
-    echo "Error: RUNPOD_API_KEY, RUNPOD_ENDPOINT, and GROK_API_KEY must be set."
-    echo "Example: export SITE_NAME='mywebsite' SITE_TLD='com' RUNPOD_API_KEY='your_api_key' RUNPOD_ENDPOINT='https://api.runpod.ai/v2/your_endpoint_id' GROK_API_KEY='your_grok_api_key'"
+if [ "$SITE_NAME" = "yourdomain" ] || [ "$SITE_TLD" = "com" ] || [ "$EMAIL" = "your_email@example.com" ] || \
+   [ "$RUNPOD_API_KEY" = "your_runpod_api_key" ] || [ "$RUNPOD_ENDPOINT" = "https://api.runpod.ai/v2/your_endpoint_id" ] || \
+   [ "$GROK_API_KEY" = "your_grok_api_key" ]; then
+    echo "Error: All configuration variables must be set to valid values in the script."
+    echo "Edit the script and set SITE_NAME, SITE_TLD, EMAIL, RUNPOD_API_KEY, RUNPOD_ENDPOINT, and GROK_API_KEY."
     exit 1
 fi
 
@@ -116,7 +117,7 @@ fi
 systemctl reload nginx
 
 # Check Nginx status
-if ! systemctl is-active --quiet nginx; then
+if ! systemctl370 is-active --quiet nginx; then
     echo "Nginx is not running. Check /var/log/nginx/error.log"
     exit 1
 fi
