@@ -3,10 +3,11 @@
 # Run as root after uploading SSH key
 
 # Configuration variables
-DOMAIN="myWebSiteName.com"
+DOMAIN="yourdomain.com"  # Replace with your actual domain
 EMAIL="your_email@example.com"  # Replace with your email for Certbot notifications
-WEB_DIR="/var/www/myWebSiteName"
-SERVER_BLOCK="/etc/nginx/sites-available/myWebSiteName"
+WEB_DIR="/var/www/llmprojectwinter"
+SERVER_BLOCK="/etc/nginx/sites-available/llmprojectwinter"
+SERVICE_NAME="math-assistant"
 
 # Exit on any error
 set -e
@@ -33,26 +34,11 @@ systemctl enable nginx
 
 # Create web directory
 mkdir -p "$WEB_DIR"
+mkdir -p "$WEB_DIR/uploads"
 
 # Set directory permissions
 chown -R www-data:www-data "$WEB_DIR"
 chmod -R 755 "$WEB_DIR"
-
-# Create index.html
-echo '<!DOCTYPE html>
-<html>
-<head>
-    <title>[website name]</title>
-</head>
-<body>
-    <h1>Welcome to [website name]</h1>
-    <p>This is a test page for my site.</p>
-</body>
-</html>' > "$WEB_DIR/index.html"
-
-# Set index.html permissions
-chown www-data:www-data "$WEB_DIR/index.html"
-chmod 644 "$WEB_DIR/index.html"
 
 # Create server block
 echo "server {
@@ -62,14 +48,14 @@ echo "server {
     server_name $DOMAIN www.$DOMAIN;
 
     root $WEB_DIR;
-    index index.html index.htm;
+    index index_3.html;
 
     location / {
-        try_files \$uri \$uri/ /index.html;
+        try_files \$uri \$uri/ /index_3.html;
     }
 
-    location /recognize {
-        proxy_pass http://localhost:8000;
+    location /upload {
+        proxy_pass http://127.0.0.1:5000/upload;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -86,7 +72,7 @@ echo "server {
 }" > "$SERVER_BLOCK"
 
 # Enable server block
-ln -s "$SERVER_BLOCK" /etc/nginx/sites-enabled/
+ln -sf "$SERVER_BLOCK" /etc/nginx/sites-enabled/
 
 # Remove default server block
 rm -f /etc/nginx/sites-enabled/default
@@ -108,7 +94,7 @@ fi
 
 # Install Python and dependencies for server.py
 apt install python3 python3-pip -y
-pip3 install fastapi uvicorn requests pillow
+pip3 install --force-reinstall fastapi[all] uvicorn requests urllib3==1.26.18 chardet==5.2.0
 
 # Install Certbot
 apt install certbot python3-certbot-nginx -y
@@ -120,6 +106,173 @@ certbot --nginx --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" -d "
 # Test Certbot renewal
 certbot renew --dry-run
 
-echo "Setup complete! Visit https://$DOMAIN to verify."
+# Create server.py
+echo 'from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import shutil
+import argparse
+import base64
+import requests
+import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+UPLOAD_FOLDER = "/var/www/llmprojectwinter/uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# RunPod configuration
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
+RUNPOD_ENDPOINT = os.getenv("RUNPOD_ENDPOINT", "https://api.runpod.ai/v2/<YOUR RUNPOD ENDPOINT ID HERE>")
+TIMEOUT = 180  # Increased to 180 seconds
+POLL_INTERVAL = 2  # Seconds between status checks
+
+def submit_job(image_b64: str) -> str:
+    """Submit a job to RunPod and return the job ID."""
+    headers = {
+        "Authorization": f"Bearer {RUNPOD_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {"input": {"image": image_b64}}
+    
+    try:
+        logger.info("Submitting job to RunPod")
+        response = requests.post(f"{RUNPOD_ENDPOINT}/run", headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        job_data = response.json()
+        job_id = job_data.get("id")
+        logger.info(f"Job submitted: {job_id}")
+        return job_id
+    except requests.RequestException as e:
+        logger.error(f"Failed to submit job: {str(e)}")
+        raise
+
+def cancel_job(job_id: str):
+    """Cancel a RunPod job."""
+    headers = {
+        "Authorization": f"Bearer {RUNPOD_API_KEY}"
+    }
+    try:
+        logger.info(f"Cancelling job {job_id}")
+        response = requests.post(f"{RUNPOD_ENDPOINT}/cancel/{job_id}", headers=headers, timeout=10)
+        response.raise_for_status()
+        logger.info(f"Job {job_id} cancelled")
+    except requests.RequestException as e:
+        logger.error(f"Failed to cancel job {job_id}: {str(e)}")
+
+def poll_job_status(job_id: str) -> dict:
+    """Poll RunPod for job status until completion or timeout."""
+    headers = {
+        "Authorization": f"Bearer {RUNPOD_API_KEY}"
+    }
+    
+    try:
+        start_time = time.time()
+        while time.time() - start_time < TIMEOUT:
+            response = requests.get(f"{RUNPOD_ENDPOINT}/status/{job_id}", headers=headers, timeout=10)
+            response.raise_for_status()
+            status_data = response.json()
+            status = status_data.get("status")
+            logger.info(f"Job {job_id} status: {status}, details: {status_data}")
+
+            if status == "COMPLETED":
+                logger.info(f"Job {job_id} completed")
+                output = status_data.get("output", {})
+                latex_b64 = output.get("latex")
+                if latex_b64:
+                    latex = base64.b64decode(latex_b64).decode("utf-8")
+                    logger.info(f"Recognized LaTeX: {latex}")
+                    return {"latex": latex}
+                return {"latex": "No LaTeX returned"}
+            elif status in ["FAILED", "CANCELLED"]:
+                logger.error(f"Job {job_id} failed: {status_data}")
+                raise Exception(f"Job {status}: {status_data}")
+            
+            logger.debug(f"Job {job_id} status: {status}, waiting...")
+            time.sleep(POLL_INTERVAL)
+        
+        logger.error(f"Job {job_id} timed out after {TIMEOUT} seconds")
+        cancel_job(job_id)  # Cancel job to clear queue
+        raise Exception("Job timed out")
+    
+    except requests.RequestException as e:
+        logger.error(f"Failed to poll job status: {str(e)}")
+        cancel_job(job_id)  # Cancel job on error
+        raise
+
+@app.post("/upload")
+async def upload_image(image: UploadFile = File(...)):
+    try:
+        # Save the image temporarily
+        file_path = os.path.join(UPLOAD_FOLDER, image.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+        
+        # Convert image to base64
+        with open(file_path, "rb") as image_file:
+            image_b64 = base64.b64encode(image_file.read()).decode("utf-8")
+        
+        # Delete the image
+        os.remove(file_path)
+        
+        # Send to RunPod
+        job_id = submit_job(image_b64)
+        result = poll_job_status(job_id)
+        
+        return JSONResponse(content=result)
+    except Exception as e:
+        # Ensure file is deleted on error
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="FastAPI server with configurable port")
+    parser.add_argument("port", type=int, default=5000, nargs="?", help="Port to run the server on (default: 5000)")
+    args = parser.parse_args()
+    
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=args.port)
+' > "$WEB_DIR/server.py"
+
+# Set server.py permissions
+chown www-data:www-data "$WEB_DIR/server.py"
+chmod 644 "$WEB_DIR/server.py"
+
+# Create systemd service for server.py
+echo "[Unit]
+Description=Math Assistant FastAPI Server
+After=network.target
+
+[Service]
+User=www-data
+WorkingDirectory=$WEB_DIR
+ExecStart=/usr/bin/python3 $WEB_DIR/server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+" > /etc/systemd/system/$SERVICE_NAME.service
+
+# Set service permissions
+chmod 644 /etc/systemd/system/$SERVICE_NAME.service
+
+# Enable and start the service
+systemctl enable $SERVICE_NAME
+systemctl start $SERVICE_NAME
+
+# Check service status
+if ! systemctl is-active --quiet $SERVICE_NAME; then
+    echo "FastAPI service failed to start. Check logs: journalctl -u $SERVICE_NAME.service"
+    exit 1
+fi
+
+echo "Setup complete! Visit https://$DOMAIN/llmprojectwinter/index_3.html to verify."
 echo "Check logs if issues arise: tail -f /var/log/nginx/error.log"
-echo "To run the FastAPI server, copy server.py to $WEB_DIR and run: python3 $WEB_DIR/server.py"
+echo "FastAPI service logs: journalctl -u $SERVICE_NAME.service"
